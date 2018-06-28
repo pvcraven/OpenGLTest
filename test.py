@@ -15,6 +15,50 @@ SCREEN_HEIGHT = 700
 
 INSTANCES = 10_000
 
+"""
+4x4 matrix called projection
+projection is the same for each vertex because of 'uniform'
+in_vert = first x, y numbers out of vert array
+in_texture = u, v stuff
+Then, we use the other array on a PER INSTANCE
+Position, angle, scale 
+"""
+
+VERTEX_SHADER = """
+#version 330
+uniform mat4 Projection;
+in vec2 in_vert;
+in vec2 in_texture;
+in vec3 in_pos;
+in float in_angle;
+in vec2 in_scale;
+out vec2 v_texture;
+void main() {
+    mat2 rotate = mat2(
+                cos(in_angle), sin(in_angle),
+                -sin(in_angle), cos(in_angle)
+            );
+    vec3 pos;
+    pos = in_pos + vec3(rotate * (in_vert * in_scale), 0.);
+    gl_Position = Projection * vec4(pos, 1.0);
+    v_texture = in_texture;
+}
+"""
+
+FRAGMENT_SHADER = """
+#version 330
+uniform sampler2D Texture;
+in vec2 v_texture;
+out vec4 f_color;
+void main() {
+    vec4 basecolor = texture(Texture, v_texture);
+    if (basecolor.a == 0.0){
+        discard;
+    }
+    f_color = basecolor;
+}
+"""
+
 
 def create_orthogonal_projection(
     left,
@@ -86,65 +130,24 @@ class FPSCounter:
         return len(self.frame_times) / sum(self.frame_times)
 
 
-class MyWindow(pyglet.window.Window):
-
-    def __init__(self):
-        super().__init__(height=SCREEN_HEIGHT, width=SCREEN_WIDTH)
-        self.ctx = None
-        self.fps_counter = None
+class MySpriteList():
+    def __init__(self, ctx):
         self.prog = None
-        self.proj = None
         self.pos_scale = None
+        self.pos_scale_buf = None
 
-    def setup(self):
+        self.prog = ctx.program(vertex_shader=VERTEX_SHADER, fragment_shader=FRAGMENT_SHADER)
 
-        self.ctx = moderngl.create_context()
-        self.ctx.viewport = (0, 0) + self.get_size()
-        self.fps_counter = FPSCounter()
+        img = pyglet.image.load('grossinis2.png', file=pyglet.resource.file('grossinis2.png'))
+        texture = ctx.texture((img.width, img.height), 4, img.get_data("RGBA", img.pitch))
+        texture.use(0)
 
-        """
-        4x4 matrix called projection
-        projection is the same for each vertex because of 'uniform'
-        in_vert = first x, y numbers out of vert array
-        in_texture = u, v stuff
-        Then, we use the other array on a PER INSTANCE
-        Position, angle, scale 
-        """
-        self.prog = self.ctx.program(
-            vertex_shader='''
-                #version 330
-                uniform mat4 Projection;
-                in vec2 in_vert;
-                in vec2 in_texture;
-                in vec3 in_pos;
-                in float in_angle;
-                in vec2 in_scale;
-                out vec2 v_texture;
-                void main() {
-                    mat2 rotate = mat2(
-                                cos(in_angle), sin(in_angle),
-                                -sin(in_angle), cos(in_angle)
-                            );
-                    vec3 pos;
-                    pos = in_pos + vec3(rotate * (in_vert * in_scale), 0.);
-                    gl_Position = Projection * vec4(pos, 1.0);
-                    v_texture = in_texture;
-                }
-            ''',
-            fragment_shader='''
-                #version 330
-                uniform sampler2D Texture;
-                in vec2 v_texture;
-                out vec4 f_color;
-                void main() {
-                    vec4 basecolor = texture(Texture, v_texture);
-                    if (basecolor.a == 0.0){
-                        discard;
-                    }
-                    f_color = basecolor;
-                }
-            ''',
-        )
+        positions = (np.random.rand(INSTANCES, 3) * 1000).astype('f4')
+        angles = (np.random.rand(INSTANCES, 1) * 2 * np.pi).astype('f4')
+        sizes = np.tile(np.array([img.width / 2, img.height / 2], dtype=np.float32), (INSTANCES, 1))
+        self.pos_scale = np.hstack((positions, angles, sizes))
+        self.pos_scale_buf = ctx.buffer(self.pos_scale.tobytes())
+
         vertices = np.array([
             #  x,    y,   u,   v
             -1.0, -1.0, 0.0, 0.0,
@@ -153,28 +156,50 @@ class MyWindow(pyglet.window.Window):
              1.0,  1.0, 1.0, 1.0,
             ], dtype=np.float32
         )
+        self.vbo = ctx.buffer(vertices.tobytes())
+
+        vao_content = [
+            (self.vbo, '2f 2f', 'in_vert', 'in_texture'),
+            (self.pos_scale_buf, '3f 1f 2f/i', 'in_pos', 'in_angle', 'in_scale')
+        ]
+
+        self.vao = ctx.vertex_array(self.prog, vao_content)
+
+    def draw(self, proj):
+        self.prog['Texture'].value = 0
+        self.prog['Projection'].write(proj.tobytes())
+        self.pos_scale_buf.write(self.pos_scale.tobytes())
+        self.vao.render(moderngl.TRIANGLE_STRIP, instances=INSTANCES)
+        self.pos_scale_buf.orphan()
+
+    def update(self):
+        self.pos_scale[1:, 0] += 0.1
+        self.pos_scale[1:, 3] += 0.01
+        # self.pos_scale[1::2, 2] += 0.1
+
+
+class MyWindow(pyglet.window.Window):
+
+    def __init__(self):
+        super().__init__(height=SCREEN_HEIGHT, width=SCREEN_WIDTH)
+        self.ctx = None
+        self.fps_counter = None
+        self.proj = None
+        self.vbo = None
+        self.my_spite_list = None
+
+    def setup(self):
+
+        self.ctx = moderngl.create_context()
+        self.ctx.viewport = (0, 0) + self.get_size()
+        self.fps_counter = FPSCounter()
+        self.my_spite_list = MySpriteList(self.ctx)
+
 
         self.proj = create_orthogonal_projection(
             left=0, right=600, bottom=0, top=400, near=-1000, far=100, dtype=np.float32
         )
 
-        img = pyglet.image.load('grossinis2.png', file=pyglet.resource.file('grossinis2.png'))
-        texture = self.ctx.texture((img.width, img.height), 4, img.get_data("RGBA", img.pitch))
-        texture.use(0)
-
-        positions = (np.random.rand(INSTANCES, 3) * 1000).astype('f4')
-        angles = (np.random.rand(INSTANCES, 1) * 2 * np.pi).astype('f4')
-        sizes = np.tile(np.array([img.width / 2, img.height / 2], dtype=np.float32), (INSTANCES, 1))
-        self.pos_scale = np.hstack((positions, angles, sizes))
-
-        self.pos_scale_buf = self.ctx.buffer(self.pos_scale.tobytes())
-
-        self.vbo = self.ctx.buffer(vertices.tobytes())
-        vao_content = [
-            (self.vbo, '2f 2f', 'in_vert', 'in_texture'),
-            (self.pos_scale_buf, '3f 1f 2f/i', 'in_pos', 'in_angle', 'in_scale')
-        ]
-        self.vao = self.ctx.vertex_array(self.prog, vao_content)
         self.ctx.enable(moderngl.BLEND)
         self.ctx.enable(moderngl.DEPTH_TEST)
 
@@ -182,13 +207,10 @@ class MyWindow(pyglet.window.Window):
         pyglet.clock.schedule_interval(self.update, 1 / 60)
 
     def update(self, dt):
-        self.pos_scale[1:, 0] += 0.1
-        self.pos_scale[1:, 3] += 0.01
-        self.pos_scale[1::2, 2] += 0.1
+        self.my_spite_list.update()
 
     def show_fps(self, dt):
         print(f"FPS: {self.fps_counter.get_fps()}")
-
 
     def on_resize(self, width, height):
         self.ctx.viewport = (0, 0, width, height)
@@ -197,15 +219,11 @@ class MyWindow(pyglet.window.Window):
         )
         return True
 
-
     def on_draw(self):
         self.ctx.clear(0.0, 0.0, 0.0, 0.0, depth=1.0)
 
-        self.prog['Texture'].value = 0
-        self.prog['Projection'].write(self.proj.tobytes())
-        self.pos_scale_buf.write(self.pos_scale.tobytes())
-        self.vao.render(moderngl.TRIANGLE_STRIP, instances=INSTANCES)
-        self.pos_scale_buf.orphan()
+        self.my_spite_list.draw(self.proj)
+
         self.fps_counter.tick()
 
 
