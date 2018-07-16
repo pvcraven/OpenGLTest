@@ -230,6 +230,9 @@ class MySpriteList(arcade.SpriteList):
         self.pos_scale_buf.orphan()
 
     def update(self):
+        if self.prog is None:
+            self.calculate_sprite_buffer()
+
         for i, sprite in enumerate(self.sprite_list):
             sprite.update()
 
@@ -242,7 +245,7 @@ class MySpriteList(arcade.SpriteList):
             # self.pos_scale[1::2, 2] += 0.1
 
 
-class MyWindow(pyglet.window.Window):
+class MyWindow(arcade.Window):
 
     def __init__(self):
         super().__init__(height=SCREEN_HEIGHT, width=SCREEN_WIDTH, resizable=True)
@@ -280,7 +283,6 @@ class MyWindow(pyglet.window.Window):
         self.ctx.enable(moderngl.DEPTH_TEST)
 
         pyglet.clock.schedule_interval(self.show_fps, 1)
-        pyglet.clock.schedule_interval(self.update, 1 / 60)
 
     def update(self, dt):
         self.my_spite_list.update()
@@ -290,9 +292,7 @@ class MyWindow(pyglet.window.Window):
 
     def on_resize(self, width, height):
         self.ctx.viewport = (0, 0, width, height)
-        self.proj = create_orthogonal_projection(
-            left=0, right=width, bottom=0, top=height, near=-1000, far=100, dtype=np.float32
-        )
+        self.proj = create_orthogonal_projection(left=0, right=width, bottom=0, top=height, near=-1000, far=100, dtype=np.float32)
         return True
 
     def on_draw(self):
@@ -308,7 +308,7 @@ def main():
     """ Main method """
     window = MyWindow()
     window.setup()
-    pyglet.app.run()
+    arcade.run()
 
 
 if __name__ == "__main__":
