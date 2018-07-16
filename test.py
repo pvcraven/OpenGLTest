@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding:  utf-8 -*-
 
+from typing import TypeVar
+
 import time
 import collections
+import math
+import random
 
 import pyglet
+import arcade
 
 import moderngl
 import numpy as np
@@ -13,7 +18,7 @@ import numpy as np
 SCREEN_WIDTH = 1200
 SCREEN_HEIGHT = 700
 
-INSTANCES = 10_000
+INSTANCES = 2000
 
 """
 4x4 matrix called projection
@@ -129,24 +134,73 @@ class FPSCounter:
     def get_fps(self):
         return len(self.frame_times) / sum(self.frame_times)
 
+T = TypeVar('T', bound=arcade.Sprite)
 
-class MySpriteList():
+class MySprite(arcade.Sprite):
+    def __init__(self, image):
+        super().__init__(image)
+        self.width = 32
+        self.height = 32
+
+    def update(self):
+        self.center_x += self.change_x
+        self.center_y += self.change_y
+        self.angle += self.change_angle
+
+        if self.center_x > SCREEN_WIDTH and self.change_x > 0:
+            self.change_x *= -1
+
+        if self.center_x < 0 and self.change_x < 0:
+            self.change_x *= -1
+
+        if self.center_y > SCREEN_HEIGHT and self.change_y > 0:
+            self.change_y *= -1
+
+        if self.center_y < 0 and self.change_y < 0:
+            self.change_y *= -1
+
+class MySpriteList(arcade.SpriteList):
     def __init__(self, ctx):
+        super().__init__(use_spatial_hash=False)
         self.prog = None
         self.pos_scale = None
         self.pos_scale_buf = None
+        self.sprite_list = []
+        self.ctx = ctx
 
-        self.prog = ctx.program(vertex_shader=VERTEX_SHADER, fragment_shader=FRAGMENT_SHADER)
+    def append(self, item: T):
+        """
+        Add a new sprite to the list.
+        """
+        self.sprite_list.append(item)
+        self.prog = None
+        item.register_sprite_list(self)
+
+    def remove(self, item: T):
+        """
+        Remove a specific sprite from the list.
+        """
+        self.sprite_list.remove(item)
+        self.prog = None
+
+    def calculate_sprite_buffer(self):
+        self.prog = self.ctx.program(vertex_shader=VERTEX_SHADER, fragment_shader=FRAGMENT_SHADER)
 
         img = pyglet.image.load('grossinis2.png', file=pyglet.resource.file('grossinis2.png'))
-        texture = ctx.texture((img.width, img.height), 4, img.get_data("RGBA", img.pitch))
+        texture = self.ctx.texture((img.width, img.height), 4, img.get_data("RGBA", img.pitch))
         texture.use(0)
 
-        positions = (np.random.rand(INSTANCES, 3) * 1000).astype('f4')
+        array_of_positions = []
+        for sprite in self.sprite_list:
+            array_of_positions.append([sprite.center_x, sprite.center_y, 0])
+
+        positions = np.array(array_of_positions).astype('f4')
+
+        # positions = (np.random.rand(INSTANCES, 3) * 1000).astype('f4')
         angles = (np.random.rand(INSTANCES, 1) * 2 * np.pi).astype('f4')
         sizes = np.tile(np.array([img.width / 2, img.height / 2], dtype=np.float32), (INSTANCES, 1))
         self.pos_scale = np.hstack((positions, angles, sizes))
-        self.pos_scale_buf = ctx.buffer(self.pos_scale.tobytes())
+        self.pos_scale_buf = self.ctx.buffer(self.pos_scale.tobytes())
 
         vertices = np.array([
             #  x,    y,   u,   v
@@ -156,16 +210,19 @@ class MySpriteList():
              1.0,  1.0, 1.0, 1.0,
             ], dtype=np.float32
         )
-        self.vbo = ctx.buffer(vertices.tobytes())
+        self.vbo = self.ctx.buffer(vertices.tobytes())
 
         vao_content = [
             (self.vbo, '2f 2f', 'in_vert', 'in_texture'),
             (self.pos_scale_buf, '3f 1f 2f/i', 'in_pos', 'in_angle', 'in_scale')
         ]
 
-        self.vao = ctx.vertex_array(self.prog, vao_content)
+        self.vao = self.ctx.vertex_array(self.prog, vao_content)
 
     def draw(self, proj):
+        if self.prog is None:
+            self.calculate_sprite_buffer()
+
         self.prog['Texture'].value = 0
         self.prog['Projection'].write(proj.tobytes())
         self.pos_scale_buf.write(self.pos_scale.tobytes())
@@ -173,15 +230,22 @@ class MySpriteList():
         self.pos_scale_buf.orphan()
 
     def update(self):
-        self.pos_scale[1:, 0] += 0.1
-        self.pos_scale[1:, 3] += 0.01
-        # self.pos_scale[1::2, 2] += 0.1
+        for i, sprite in enumerate(self.sprite_list):
+            sprite.update()
+
+            self.pos_scale[i, 0] = sprite.center_x
+            self.pos_scale[i, 1] = sprite.center_y
+            self.pos_scale[i, 3] = math.radians(sprite.angle)
+            self.pos_scale[i, 4] = (sprite.width / 2) * sprite.scale
+            self.pos_scale[i, 5] = (sprite.height / 2) * sprite.scale
+            # self.pos_scale[1:, 3] += 0.01
+            # self.pos_scale[1::2, 2] += 0.1
 
 
 class MyWindow(pyglet.window.Window):
 
     def __init__(self):
-        super().__init__(height=SCREEN_HEIGHT, width=SCREEN_WIDTH)
+        super().__init__(height=SCREEN_HEIGHT, width=SCREEN_WIDTH, resizable=True)
         self.ctx = None
         self.fps_counter = None
         self.proj = None
@@ -193,12 +257,24 @@ class MyWindow(pyglet.window.Window):
         self.ctx = moderngl.create_context()
         self.ctx.viewport = (0, 0) + self.get_size()
         self.fps_counter = FPSCounter()
+
         self.my_spite_list = MySpriteList(self.ctx)
+        # self.my_spite_list = arcade.SpriteList()
+        for i in range(INSTANCES):
+            my_sprite = MySprite('grossinis2.png')
+
+            my_sprite.center_x = random.randrange(SCREEN_WIDTH)
+            my_sprite.center_y = random.randrange(SCREEN_HEIGHT)
+            my_sprite.angle = random.randrange(360)
+
+            my_sprite.change_x = random.random() * 5 - 2.5
+            my_sprite.change_y = random.random() * 5 - 2.5
+            my_sprite.change_angle = random.random() * 5 - 2.5
+
+            self.my_spite_list.append(my_sprite)
 
 
-        self.proj = create_orthogonal_projection(
-            left=0, right=600, bottom=0, top=400, near=-1000, far=100, dtype=np.float32
-        )
+        self.proj = create_orthogonal_projection(left=0, right=600, bottom=0, top=400, near=-1000, far=100, dtype=np.float32)
 
         self.ctx.enable(moderngl.BLEND)
         self.ctx.enable(moderngl.DEPTH_TEST)
@@ -223,6 +299,7 @@ class MyWindow(pyglet.window.Window):
         self.ctx.clear(0.0, 0.0, 0.0, 0.0, depth=1.0)
 
         self.my_spite_list.draw(self.proj)
+        # self.my_spite_list.draw()
 
         self.fps_counter.tick()
 
