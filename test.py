@@ -14,11 +14,18 @@ import arcade
 import moderngl
 import numpy as np
 
+NEW_CODE = 0
+OLD_CODE = 1
+
+drawing_engine = OLD_CODE
 
 SCREEN_WIDTH = 1200
 SCREEN_HEIGHT = 700
 
 INSTANCES = 2000
+
+opengl_context = None
+projection = None
 
 """
 4x4 matrix called projection
@@ -132,15 +139,19 @@ class FPSCounter:
         self.frame_times.append(dt)
 
     def get_fps(self):
-        return len(self.frame_times) / sum(self.frame_times)
+        all_frame_times = sum(self.frame_times)
+        if all_frame_times == 0:
+            return 0
+        else:
+            return len(self.frame_times) / sum(self.frame_times)
 
 T = TypeVar('T', bound=arcade.Sprite)
 
 class MySprite(arcade.Sprite):
-    def __init__(self, image):
-        super().__init__(image)
-        self.width = 32
-        self.height = 32
+    def __init__(self, image, scale=1):
+        super().__init__(image, scale)
+        # self.width = 32
+        # self.height = 32
 
     def update(self):
         self.center_x += self.change_x
@@ -160,13 +171,12 @@ class MySprite(arcade.Sprite):
             self.change_y *= -1
 
 class MySpriteList(arcade.SpriteList):
-    def __init__(self, ctx):
+    def __init__(self):
         super().__init__(use_spatial_hash=False)
         self.prog = None
         self.pos_scale = None
         self.pos_scale_buf = None
         self.sprite_list = []
-        self.ctx = ctx
 
     def append(self, item: T):
         """
@@ -184,10 +194,10 @@ class MySpriteList(arcade.SpriteList):
         self.prog = None
 
     def calculate_sprite_buffer(self):
-        self.prog = self.ctx.program(vertex_shader=VERTEX_SHADER, fragment_shader=FRAGMENT_SHADER)
+        self.prog = opengl_context.program(vertex_shader=VERTEX_SHADER, fragment_shader=FRAGMENT_SHADER)
 
         img = pyglet.image.load('grossinis2.png', file=pyglet.resource.file('grossinis2.png'))
-        texture = self.ctx.texture((img.width, img.height), 4, img.get_data("RGBA", img.pitch))
+        texture = opengl_context.texture((img.width, img.height), 4, img.get_data("RGBA", img.pitch))
         texture.use(0)
 
         array_of_positions = []
@@ -196,11 +206,10 @@ class MySpriteList(arcade.SpriteList):
 
         positions = np.array(array_of_positions).astype('f4')
 
-        # positions = (np.random.rand(INSTANCES, 3) * 1000).astype('f4')
         angles = (np.random.rand(INSTANCES, 1) * 2 * np.pi).astype('f4')
         sizes = np.tile(np.array([img.width / 2, img.height / 2], dtype=np.float32), (INSTANCES, 1))
         self.pos_scale = np.hstack((positions, angles, sizes))
-        self.pos_scale_buf = self.ctx.buffer(self.pos_scale.tobytes())
+        self.pos_scale_buf = opengl_context.buffer(self.pos_scale.tobytes())
 
         vertices = np.array([
             #  x,    y,   u,   v
@@ -210,21 +219,21 @@ class MySpriteList(arcade.SpriteList):
              1.0,  1.0, 1.0, 1.0,
             ], dtype=np.float32
         )
-        self.vbo = self.ctx.buffer(vertices.tobytes())
+        self.vbo = opengl_context.buffer(vertices.tobytes())
 
         vao_content = [
             (self.vbo, '2f 2f', 'in_vert', 'in_texture'),
             (self.pos_scale_buf, '3f 1f 2f/i', 'in_pos', 'in_angle', 'in_scale')
         ]
 
-        self.vao = self.ctx.vertex_array(self.prog, vao_content)
+        self.vao = opengl_context.vertex_array(self.prog, vao_content)
 
-    def draw(self, proj):
+    def draw(self):
         if self.prog is None:
             self.calculate_sprite_buffer()
 
         self.prog['Texture'].value = 0
-        self.prog['Projection'].write(proj.tobytes())
+        self.prog['Projection'].write(projection.tobytes())
         self.pos_scale_buf.write(self.pos_scale.tobytes())
         self.vao.render(moderngl.TRIANGLE_STRIP, instances=INSTANCES)
         self.pos_scale_buf.orphan()
@@ -239,32 +248,36 @@ class MySpriteList(arcade.SpriteList):
             self.pos_scale[i, 0] = sprite.center_x
             self.pos_scale[i, 1] = sprite.center_y
             self.pos_scale[i, 3] = math.radians(sprite.angle)
-            self.pos_scale[i, 4] = (sprite.width / 2) * sprite.scale
-            self.pos_scale[i, 5] = (sprite.height / 2) * sprite.scale
-            # self.pos_scale[1:, 3] += 0.01
-            # self.pos_scale[1::2, 2] += 0.1
+            self.pos_scale[i, 4] = (sprite.width * 2) * sprite.scale
+            self.pos_scale[i, 5] = (sprite.height * 2) * sprite.scale
 
 
 class MyWindow(arcade.Window):
 
     def __init__(self):
         super().__init__(height=SCREEN_HEIGHT, width=SCREEN_WIDTH, resizable=True)
-        self.ctx = None
         self.fps_counter = None
-        self.proj = None
         self.vbo = None
         self.my_spite_list = None
 
     def setup(self):
+        global opengl_context
+        global projection
 
-        self.ctx = moderngl.create_context()
-        self.ctx.viewport = (0, 0) + self.get_size()
+        if drawing_engine == NEW_CODE:
+            opengl_context = moderngl.create_context()
+            opengl_context.viewport = (0, 0) + self.get_size()
+
         self.fps_counter = FPSCounter()
 
-        self.my_spite_list = MySpriteList(self.ctx)
-        # self.my_spite_list = arcade.SpriteList()
+        if drawing_engine == OLD_CODE:
+            self.my_spite_list = arcade.SpriteList()
+        else:
+            self.my_spite_list = MySpriteList()
+
         for i in range(INSTANCES):
-            my_sprite = MySprite('grossinis2.png')
+
+            my_sprite = MySprite('grossinis2.png', 0.25)
 
             my_sprite.center_x = random.randrange(SCREEN_WIDTH)
             my_sprite.center_y = random.randrange(SCREEN_HEIGHT)
@@ -276,11 +289,11 @@ class MyWindow(arcade.Window):
 
             self.my_spite_list.append(my_sprite)
 
+        if drawing_engine == NEW_CODE:
+            projection = create_orthogonal_projection(left=0, right=SCREEN_WIDTH, bottom=0, top=SCREEN_HEIGHT, near=-1000, far=100, dtype=np.float32)
 
-        self.proj = create_orthogonal_projection(left=0, right=600, bottom=0, top=400, near=-1000, far=100, dtype=np.float32)
-
-        self.ctx.enable(moderngl.BLEND)
-        self.ctx.enable(moderngl.DEPTH_TEST)
+            opengl_context.enable(moderngl.BLEND)
+            opengl_context.enable(moderngl.DEPTH_TEST)
 
         pyglet.clock.schedule_interval(self.show_fps, 1)
 
@@ -290,16 +303,13 @@ class MyWindow(arcade.Window):
     def show_fps(self, dt):
         print(f"FPS: {self.fps_counter.get_fps()}")
 
-    def on_resize(self, width, height):
-        self.ctx.viewport = (0, 0, width, height)
-        self.proj = create_orthogonal_projection(left=0, right=width, bottom=0, top=height, near=-1000, far=100, dtype=np.float32)
-        return True
-
     def on_draw(self):
-        self.ctx.clear(0.0, 0.0, 0.0, 0.0, depth=1.0)
+        if drawing_engine == OLD_CODE:
+            arcade.start_render()
+        else:
+            opengl_context.clear(0.0, 0.0, 0.0, 0.0, depth=1.0)
 
-        self.my_spite_list.draw(self.proj)
-        # self.my_spite_list.draw()
+        self.my_spite_list.draw()
 
         self.fps_counter.tick()
 
