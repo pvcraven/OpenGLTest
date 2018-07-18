@@ -45,6 +45,7 @@ in vec2 in_texture;
 in vec3 in_pos;
 in float in_angle;
 in vec2 in_scale;
+in vec4 np_sub_tex_coords;
 out vec2 v_texture;
 void main() {
     mat2 rotate = mat2(
@@ -230,15 +231,13 @@ class MySpriteList(arcade.SpriteList):
 
         np_array_angles = (np.random.rand(INSTANCES, 1) * 2 * np.pi).astype('f4')
         np_array_sizes = np.tile(np.array([img.width / 2, img.height / 2], dtype=np.float32), (INSTANCES, 1))
-        self.pos_angle_scale = np.hstack((np_array_positions, np_array_angles, np_array_sizes))
+        np_sub_tex_coords = np.tile(np.array([0.0, 0.0, 42.0, 42.0], dtype=np.float32), (INSTANCES, 1))
+
+        self.pos_angle_scale = np.hstack((np_array_positions, np_array_angles, np_array_sizes, np_sub_tex_coords))
+        # self.pos_angle_scale = np.hstack((np_array_positions, np_array_angles, np_array_sizes))
+
         self.pos_angle_scale_buf = opengl_context.buffer(self.pos_angle_scale.tobytes())
 
-        """
-        ********
-        This same array applies for each item in the array. How can I use a different one for 
-        each item so I can map a different texture onto it?
-        ********
-        """
         vertices = np.array([
             #  x,    y,   u,   v
             -1.0, -1.0, 0.0, 0.0,
@@ -251,12 +250,13 @@ class MySpriteList(arcade.SpriteList):
 
         vao_content = [
             (self.vbo_buf, '2f 2f', 'in_vert', 'in_texture'),
-            (self.pos_angle_scale_buf, '3f 1f 2f/i', 'in_pos', 'in_angle', 'in_scale')
+            (self.pos_angle_scale_buf, '3f 1f 2f 4f/i', 'in_pos', 'in_angle', 'in_scale', 'sub_tex_coords')
         ]
-
+        print("XXX", len(self.pos_angle_scale.tobytes()))
         self.vao = opengl_context.vertex_array(self.prog, vao_content)
 
     def draw(self):
+
         if self.prog is None:
             self.calculate_sprite_buffer()
 
