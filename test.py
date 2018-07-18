@@ -7,6 +7,7 @@ import time
 import collections
 import math
 import random
+from PIL import Image
 
 import pyglet
 import arcade
@@ -17,12 +18,12 @@ import numpy as np
 NEW_CODE = 0
 OLD_CODE = 1
 
-drawing_engine = OLD_CODE
+drawing_engine = NEW_CODE
 
 SCREEN_WIDTH = 1200
 SCREEN_HEIGHT = 700
 
-INSTANCES = 2000
+INSTANCES = 2
 
 opengl_context = None
 projection = None
@@ -174,8 +175,8 @@ class MySpriteList(arcade.SpriteList):
     def __init__(self):
         super().__init__(use_spatial_hash=False)
         self.prog = None
-        self.pos_scale = None
-        self.pos_scale_buf = None
+        self.pos_angle_scale = None
+        self.pos_angle_scale_buf = None
         self.sprite_list = []
 
     def append(self, item: T):
@@ -196,34 +197,61 @@ class MySpriteList(arcade.SpriteList):
     def calculate_sprite_buffer(self):
         self.prog = opengl_context.program(vertex_shader=VERTEX_SHADER, fragment_shader=FRAGMENT_SHADER)
 
-        img = pyglet.image.load('grossinis2.png', file=pyglet.resource.file('grossinis2.png'))
-        texture = opengl_context.texture((img.width, img.height), 4, img.get_data("RGBA", img.pitch))
+        img = Image.open("gold_1.png")
+
+        images = list(map(Image.open, ['gold_1.png', 'gold_2.png']))
+        widths, heights = zip(*(i.size for i in images))
+
+        total_width = sum(widths)
+        max_height = max(heights)
+
+        new_image = Image.new('RGBA', (total_width, max_height))
+
+        x_offset = 0
+        for image in images:
+            new_image.paste(image, (x_offset, 0))
+            x_offset += image.size[0]
+
+
+        new_image.save("out.png")
+
+        # texture = opengl_context.texture((img.width, img.height), 4, np.asarray(img))
+        texture = opengl_context.texture((new_image.width, new_image.height), 4, np.asarray(new_image))
+
+        # img = pyglet.image.load('gold_1.png', file=pyglet.resource.file('gold_1.png'))
+        # texture = opengl_context.texture((img.width, img.height), 4, img.get_data("RGBA", img.pitch))
         texture.use(0)
 
         array_of_positions = []
         for sprite in self.sprite_list:
             array_of_positions.append([sprite.center_x, sprite.center_y, 0])
 
-        positions = np.array(array_of_positions).astype('f4')
+        np_array_positions = np.array(array_of_positions).astype('f4')
 
-        angles = (np.random.rand(INSTANCES, 1) * 2 * np.pi).astype('f4')
-        sizes = np.tile(np.array([img.width / 2, img.height / 2], dtype=np.float32), (INSTANCES, 1))
-        self.pos_scale = np.hstack((positions, angles, sizes))
-        self.pos_scale_buf = opengl_context.buffer(self.pos_scale.tobytes())
+        np_array_angles = (np.random.rand(INSTANCES, 1) * 2 * np.pi).astype('f4')
+        np_array_sizes = np.tile(np.array([img.width / 2, img.height / 2], dtype=np.float32), (INSTANCES, 1))
+        self.pos_angle_scale = np.hstack((np_array_positions, np_array_angles, np_array_sizes))
+        self.pos_angle_scale_buf = opengl_context.buffer(self.pos_angle_scale.tobytes())
 
+        """
+        ********
+        This same array applies for each item in the array. How can I use a different one for 
+        each item so I can map a different texture onto it?
+        ********
+        """
         vertices = np.array([
             #  x,    y,   u,   v
             -1.0, -1.0, 0.0, 0.0,
             -1.0,  1.0, 0.0, 1.0,
              1.0, -1.0, 1.0, 0.0,
              1.0,  1.0, 1.0, 1.0,
-            ], dtype=np.float32
+        ], dtype=np.float32
         )
-        self.vbo = opengl_context.buffer(vertices.tobytes())
+        self.vbo_buf = opengl_context.buffer(vertices.tobytes())
 
         vao_content = [
-            (self.vbo, '2f 2f', 'in_vert', 'in_texture'),
-            (self.pos_scale_buf, '3f 1f 2f/i', 'in_pos', 'in_angle', 'in_scale')
+            (self.vbo_buf, '2f 2f', 'in_vert', 'in_texture'),
+            (self.pos_angle_scale_buf, '3f 1f 2f/i', 'in_pos', 'in_angle', 'in_scale')
         ]
 
         self.vao = opengl_context.vertex_array(self.prog, vao_content)
@@ -234,9 +262,9 @@ class MySpriteList(arcade.SpriteList):
 
         self.prog['Texture'].value = 0
         self.prog['Projection'].write(projection.tobytes())
-        self.pos_scale_buf.write(self.pos_scale.tobytes())
+        self.pos_angle_scale_buf.write(self.pos_angle_scale.tobytes())
         self.vao.render(moderngl.TRIANGLE_STRIP, instances=INSTANCES)
-        self.pos_scale_buf.orphan()
+        self.pos_angle_scale_buf.orphan()
 
     def update(self):
         if self.prog is None:
@@ -245,11 +273,11 @@ class MySpriteList(arcade.SpriteList):
         for i, sprite in enumerate(self.sprite_list):
             sprite.update()
 
-            self.pos_scale[i, 0] = sprite.center_x
-            self.pos_scale[i, 1] = sprite.center_y
-            self.pos_scale[i, 3] = math.radians(sprite.angle)
-            self.pos_scale[i, 4] = (sprite.width * 2) * sprite.scale
-            self.pos_scale[i, 5] = (sprite.height * 2) * sprite.scale
+            self.pos_angle_scale[i, 0] = sprite.center_x
+            self.pos_angle_scale[i, 1] = sprite.center_y
+            self.pos_angle_scale[i, 3] = math.radians(sprite.angle)
+            self.pos_angle_scale[i, 4] = (sprite.width * 2) * sprite.scale
+            self.pos_angle_scale[i, 5] = (sprite.height * 2) * sprite.scale
 
 
 class MyWindow(arcade.Window):
@@ -277,7 +305,7 @@ class MyWindow(arcade.Window):
 
         for i in range(INSTANCES):
 
-            my_sprite = MySprite('grossinis2.png', 0.25)
+            my_sprite = MySprite('gold_1.png', 0.25)
 
             my_sprite.center_x = random.randrange(SCREEN_WIDTH)
             my_sprite.center_y = random.randrange(SCREEN_HEIGHT)
