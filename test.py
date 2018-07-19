@@ -45,7 +45,7 @@ in vec2 in_texture;
 in vec3 in_pos;
 in float in_angle;
 in vec2 in_scale;
-in vec4 np_sub_tex_coords;
+in vec4 in_sub_tex_coords;
 out vec2 v_texture;
 void main() {
     mat2 rotate = mat2(
@@ -54,7 +54,9 @@ void main() {
             );
     vec3 pos;
     pos = in_pos + vec3(rotate * (in_vert * in_scale), 0.);
+    pos[0] += in_sub_tex_coords[0];
     gl_Position = Projection * vec4(pos, 1.0);
+   
     v_texture = in_texture;
 }
 """
@@ -250,9 +252,13 @@ class MySpriteList(arcade.SpriteList):
 
         vao_content = [
             (self.vbo_buf, '2f 2f', 'in_vert', 'in_texture'),
-            (self.pos_angle_scale_buf, '3f 1f 2f 4f/i', 'in_pos', 'in_angle', 'in_scale', 'sub_tex_coords')
+            (self.pos_angle_scale_buf, '3f 1f 2f 4f/i', 'in_pos', 'in_angle', 'in_scale', 'in_sub_tex_coords')
         ]
         print("XXX", len(self.pos_angle_scale.tobytes()))
+
+        members = self.prog._members
+        content = tuple((a.mglo, b) + tuple(getattr(members.get(x), 'mglo', None) for x in c) for a, b, *c in vao_content)
+
         self.vao = opengl_context.vertex_array(self.prog, vao_content)
 
     def draw(self):
