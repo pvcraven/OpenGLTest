@@ -23,7 +23,7 @@ drawing_engine = NEW_CODE
 SCREEN_WIDTH = 1200
 SCREEN_HEIGHT = 700
 
-INSTANCES = 2
+INSTANCES = 1800
 
 opengl_context = None
 projection = None
@@ -54,10 +54,13 @@ void main() {
             );
     vec3 pos;
     pos = in_pos + vec3(rotate * (in_vert * in_scale), 0.);
-    pos[0] += in_sub_tex_coords[0];
     gl_Position = Projection * vec4(pos, 1.0);
-   
-    v_texture = in_texture;
+
+    vec2 tex_offset = in_sub_tex_coords.xy;
+    vec2 tex_size = in_sub_tex_coords.zw;
+
+    v_texture = in_texture * tex_size + tex_offset; 
+
 }
 """
 
@@ -77,13 +80,13 @@ void main() {
 
 
 def create_orthogonal_projection(
-    left,
-    right,
-    bottom,
-    top,
-    near,
-    far,
-    dtype=None
+        left,
+        right,
+        bottom,
+        top,
+        near,
+        far,
+        dtype=None
 ):
     """Creates an orthogonal projection matrix.
     :param float left: The left of the near plane relative to the plane's centre.
@@ -124,9 +127,9 @@ def create_orthogonal_projection(
     tz = -(far + near) / fmn
 
     return np.array((
-        ( a, 0., 0., 0.),
-        (0.,  b, 0., 0.),
-        (0., 0.,  c, 0.),
+        (a, 0., 0., 0.),
+        (0., b, 0., 0.),
+        (0., 0., c, 0.),
         (tx, ty, tz, 1.),
     ), dtype=dtype)
 
@@ -149,13 +152,14 @@ class FPSCounter:
         else:
             return len(self.frame_times) / sum(self.frame_times)
 
+
 T = TypeVar('T', bound=arcade.Sprite)
 
+
 class MySprite(arcade.Sprite):
-    def __init__(self, image, scale=1):
-        super().__init__(image, scale)
-        # self.width = 32
-        # self.height = 32
+    def __init__(self, name, scale):
+        super().__init__(name, scale)
+        self.texture_name = None
 
     def update(self):
         self.center_x += self.change_x
@@ -173,6 +177,7 @@ class MySprite(arcade.Sprite):
 
         if self.center_y < 0 and self.change_y < 0:
             self.change_y *= -1
+
 
 class MySpriteList(arcade.SpriteList):
     def __init__(self):
@@ -200,52 +205,72 @@ class MySpriteList(arcade.SpriteList):
     def calculate_sprite_buffer(self):
         self.prog = opengl_context.program(vertex_shader=VERTEX_SHADER, fragment_shader=FRAGMENT_SHADER)
 
-        img = Image.open("gold_1.png")
+        # Loop through each sprite and grab its position, and the texture it will be using.
+        array_of_positions = []
+        array_of_texture_names = []
+        array_of_images = []
+        array_of_sizes = []
+        for sprite in self.sprite_list:
+            array_of_positions.append([sprite.center_x, sprite.center_y, 0])
+            if not sprite.texture_name in array_of_texture_names:
+                array_of_texture_names.append(sprite.texture_name)
+                image = Image.open(sprite.texture_name)
+                array_of_images.append(image)
+            else:
+                index = array_of_texture_names.index(sprite.texture_name)
+                image = array_of_images[index]
+            array_of_sizes.append(image.size)
 
-        images = list(map(Image.open, ['gold_1.png', 'gold_2.png']))
-        widths, heights = zip(*(i.size for i in images))
+        # Get their sizes
+        widths, heights = zip(*(i.size for i in array_of_images))
 
+        # Figure out what size a composate would be
         total_width = sum(widths)
         max_height = max(heights)
 
+        # Make the composite image
         new_image = Image.new('RGBA', (total_width, max_height))
 
         x_offset = 0
-        for image in images:
+        for image in array_of_images:
             new_image.paste(image, (x_offset, 0))
             x_offset += image.size[0]
 
-
-        new_image.save("out.png")
-
-        # texture = opengl_context.texture((img.width, img.height), 4, np.asarray(img))
+        # Create a texture out the composite image
         texture = opengl_context.texture((new_image.width, new_image.height), 4, np.asarray(new_image))
-
-        # img = pyglet.image.load('gold_1.png', file=pyglet.resource.file('gold_1.png'))
-        # texture = opengl_context.texture((img.width, img.height), 4, img.get_data("RGBA", img.pitch))
         texture.use(0)
 
-        array_of_positions = []
-        for sprite in self.sprite_list:
-            array_of_positions.append([sprite.center_x, sprite.center_y, 0])
+        # Create a list with the coordinates of all the unique textures
+        tex_coords = []
+        start_x = 0.0
+        for image in array_of_images:
+            end_x = start_x + (image.width / total_width)
+            tex_coords.append([start_x, 0.0, image.width / total_width, 1.0])
+            start_x = end_x
 
+        # Go through each sprite and pull from the coordinate list, the proper
+        # coordinates for that sprite's image.
+        array_of_sub_tex_coords = []
+        for sprite in self.sprite_list:
+            index = array_of_texture_names.index(sprite.texture_name)
+            array_of_sub_tex_coords.append(tex_coords[index])
+
+        # Create numpy array with info on location and such
         np_array_positions = np.array(array_of_positions).astype('f4')
 
-        np_array_angles = (np.random.rand(INSTANCES, 1) * 2 * np.pi).astype('f4')
-        np_array_sizes = np.tile(np.array([img.width / 2, img.height / 2], dtype=np.float32), (INSTANCES, 1))
-        np_sub_tex_coords = np.tile(np.array([0.0, 0.0, 42.0, 42.0], dtype=np.float32), (INSTANCES, 1))
-
+        # np_array_angles = (np.random.rand(INSTANCES, 1) * 2 * np.pi).astype('f4')
+        np_array_angles = np.tile(np.array(0, dtype=np.float32), (INSTANCES, 1))
+        np_array_sizes = np.array(array_of_sizes).astype('f4')
+        np_sub_tex_coords = np.array(array_of_sub_tex_coords).astype('f4')
         self.pos_angle_scale = np.hstack((np_array_positions, np_array_angles, np_array_sizes, np_sub_tex_coords))
-        # self.pos_angle_scale = np.hstack((np_array_positions, np_array_angles, np_array_sizes))
-
         self.pos_angle_scale_buf = opengl_context.buffer(self.pos_angle_scale.tobytes())
 
         vertices = np.array([
             #  x,    y,   u,   v
             -1.0, -1.0, 0.0, 0.0,
-            -1.0,  1.0, 0.0, 1.0,
-             1.0, -1.0, 1.0, 0.0,
-             1.0,  1.0, 1.0, 1.0,
+            -1.0, 1.0, 0.0, 1.0,
+            1.0, -1.0, 1.0, 0.0,
+            1.0, 1.0, 1.0, 1.0,
         ], dtype=np.float32
         )
         self.vbo_buf = opengl_context.buffer(vertices.tobytes())
@@ -254,10 +279,6 @@ class MySpriteList(arcade.SpriteList):
             (self.vbo_buf, '2f 2f', 'in_vert', 'in_texture'),
             (self.pos_angle_scale_buf, '3f 1f 2f 4f/i', 'in_pos', 'in_angle', 'in_scale', 'in_sub_tex_coords')
         ]
-        print("XXX", len(self.pos_angle_scale.tobytes()))
-
-        members = self.prog._members
-        content = tuple((a.mglo, b) + tuple(getattr(members.get(x), 'mglo', None) for x in c) for a, b, *c in vao_content)
 
         self.vao = opengl_context.vertex_array(self.prog, vao_content)
 
@@ -309,22 +330,25 @@ class MyWindow(arcade.Window):
         else:
             self.my_spite_list = MySpriteList()
 
+        sprite_names = ['gold_1.png', 'gold_2.png', 'gold_3.png', 'gold_4.png']
         for i in range(INSTANCES):
-
             my_sprite = MySprite('gold_1.png', 0.25)
 
             my_sprite.center_x = random.randrange(SCREEN_WIDTH)
             my_sprite.center_y = random.randrange(SCREEN_HEIGHT)
             my_sprite.angle = random.randrange(360)
+            my_sprite.texture_name = random.choice(sprite_names)
 
             my_sprite.change_x = random.random() * 5 - 2.5
             my_sprite.change_y = random.random() * 5 - 2.5
             my_sprite.change_angle = random.random() * 5 - 2.5
+            my_sprite.scale = 0.25
 
             self.my_spite_list.append(my_sprite)
 
         if drawing_engine == NEW_CODE:
-            projection = create_orthogonal_projection(left=0, right=SCREEN_WIDTH, bottom=0, top=SCREEN_HEIGHT, near=-1000, far=100, dtype=np.float32)
+            projection = create_orthogonal_projection(left=0, right=SCREEN_WIDTH, bottom=0, top=SCREEN_HEIGHT,
+                                                      near=-1000, far=100, dtype=np.float32)
 
             opengl_context.enable(moderngl.BLEND)
             opengl_context.enable(moderngl.DEPTH_TEST)
