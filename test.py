@@ -18,7 +18,7 @@ import numpy as np
 NEW_CODE = 0
 OLD_CODE = 1
 
-INSTANCES = 1100
+INSTANCES = 1
 
 DRAWING_ENGINE = NEW_CODE
 MOVE_SPRITES = True
@@ -175,6 +175,8 @@ class MySprite(arcade.Sprite):
 
         if self.center_y < 0 and self.change_y < 0:
             self.change_y *= -1
+
+        print(f"{self.center_x:5.1f}, {self.center_y:5.1f}")
 
 
 class MySpriteList(arcade.SpriteList):
@@ -337,6 +339,7 @@ class MyWindow(arcade.Window):
             self.my_spite_list = MySpriteList()
 
         sprite_names = ['gold_1.png', 'gold_2.png', 'gold_3.png', 'gold_4.png', 'character.png']
+        sprite_names = ['character.png']
         for i in range(INSTANCES):
             texture_name = random.choice(sprite_names)
             my_sprite = MySprite(texture_name, 0.25)
@@ -351,7 +354,7 @@ class MyWindow(arcade.Window):
             my_sprite.change_y = random.random() * 5 - 2.5
             my_sprite.change_angle = random.random() * 5 - 2.5
             my_sprite.change_angle = 0
-            my_sprite.scale = 0.25
+            my_sprite.scale = 0.5
 
             self.my_spite_list.append(my_sprite)
 
