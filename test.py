@@ -18,12 +18,13 @@ import numpy as np
 NEW_CODE = 0
 OLD_CODE = 1
 
-drawing_engine = NEW_CODE
+INSTANCES = 1100
+
+DRAWING_ENGINE = NEW_CODE
+MOVE_SPRITES = True
 
 SCREEN_WIDTH = 1200
 SCREEN_HEIGHT = 700
-
-INSTANCES = 1800
 
 opengl_context = None
 projection = None
@@ -157,9 +158,6 @@ T = TypeVar('T', bound=arcade.Sprite)
 
 
 class MySprite(arcade.Sprite):
-    def __init__(self, name, scale):
-        super().__init__(name, scale)
-        self.texture_name = None
 
     def update(self):
         self.center_x += self.change_x
@@ -182,7 +180,7 @@ class MySprite(arcade.Sprite):
 class MySpriteList(arcade.SpriteList):
     def __init__(self):
         super().__init__(use_spatial_hash=False)
-        self.prog = None
+        self.program = None
         self.pos_angle_scale = None
         self.pos_angle_scale_buf = None
         self.sprite_list = []
@@ -192,7 +190,7 @@ class MySpriteList(arcade.SpriteList):
         Add a new sprite to the list.
         """
         self.sprite_list.append(item)
-        self.prog = None
+        self.program = None
         item.register_sprite_list(self)
 
     def remove(self, item: T):
@@ -200,25 +198,27 @@ class MySpriteList(arcade.SpriteList):
         Remove a specific sprite from the list.
         """
         self.sprite_list.remove(item)
-        self.prog = None
+        self.program = None
 
     def calculate_sprite_buffer(self):
-        self.prog = opengl_context.program(vertex_shader=VERTEX_SHADER, fragment_shader=FRAGMENT_SHADER)
+        if self.program is None:
+            self.program = opengl_context.program(vertex_shader=VERTEX_SHADER, fragment_shader=FRAGMENT_SHADER)
 
         # Loop through each sprite and grab its position, and the texture it will be using.
         array_of_positions = []
         array_of_texture_names = []
         array_of_images = []
         array_of_sizes = []
+
         for sprite in self.sprite_list:
             array_of_positions.append([sprite.center_x, sprite.center_y, 0])
-            if not sprite.texture_name in array_of_texture_names:
+            if sprite.texture_name in array_of_texture_names:
+                index = array_of_texture_names.index(sprite.texture_name)
+                image = array_of_images[index]
+            else:
                 array_of_texture_names.append(sprite.texture_name)
                 image = Image.open(sprite.texture_name)
                 array_of_images.append(image)
-            else:
-                index = array_of_texture_names.index(sprite.texture_name)
-                image = array_of_images[index]
             array_of_sizes.append(image.size)
 
         # Get their sizes
@@ -273,38 +273,44 @@ class MySpriteList(arcade.SpriteList):
             1.0, 1.0, 1.0, 1.0,
         ], dtype=np.float32
         )
-        self.vbo_buf = opengl_context.buffer(vertices.tobytes())
+        vbo_buf = opengl_context.buffer(vertices.tobytes())
 
         vao_content = [
-            (self.vbo_buf, '2f 2f', 'in_vert', 'in_texture'),
+            (vbo_buf, '2f 2f', 'in_vert', 'in_texture'),
             (self.pos_angle_scale_buf, '3f 1f 2f 4f/i', 'in_pos', 'in_angle', 'in_scale', 'in_sub_tex_coords')
         ]
 
-        self.vao = opengl_context.vertex_array(self.prog, vao_content)
+        self.vao = opengl_context.vertex_array(self.program, vao_content)
 
-    def draw(self):
+        self.update_positions()
 
-        if self.prog is None:
-            self.calculate_sprite_buffer()
-
-        self.prog['Texture'].value = 0
-        self.prog['Projection'].write(projection.tobytes())
-        self.pos_angle_scale_buf.write(self.pos_angle_scale.tobytes())
-        self.vao.render(moderngl.TRIANGLE_STRIP, instances=INSTANCES)
-        self.pos_angle_scale_buf.orphan()
-
-    def update(self):
-        if self.prog is None:
-            self.calculate_sprite_buffer()
-
+    def update_positions(self):
         for i, sprite in enumerate(self.sprite_list):
-            sprite.update()
-
             self.pos_angle_scale[i, 0] = sprite.center_x
             self.pos_angle_scale[i, 1] = sprite.center_y
             self.pos_angle_scale[i, 3] = math.radians(sprite.angle)
             self.pos_angle_scale[i, 4] = (sprite.width * 2) * sprite.scale
             self.pos_angle_scale[i, 5] = (sprite.height * 2) * sprite.scale
+
+    def draw(self):
+
+        if self.program is None:
+            self.calculate_sprite_buffer()
+
+        self.program['Texture'].value = 0
+        self.program['Projection'].write(projection.tobytes())
+        self.pos_angle_scale_buf.write(self.pos_angle_scale.tobytes())
+        self.vao.render(moderngl.TRIANGLE_STRIP, instances=INSTANCES)
+        self.pos_angle_scale_buf.orphan()
+
+    def update(self):
+        if self.program is None:
+            self.calculate_sprite_buffer()
+
+        for i, sprite in enumerate(self.sprite_list):
+            sprite.update()
+
+        self.update_positions()
 
 
 class MyWindow(arcade.Window):
@@ -319,34 +325,39 @@ class MyWindow(arcade.Window):
         global opengl_context
         global projection
 
-        if drawing_engine == NEW_CODE:
+        if DRAWING_ENGINE == NEW_CODE:
             opengl_context = moderngl.create_context()
             opengl_context.viewport = (0, 0) + self.get_size()
 
         self.fps_counter = FPSCounter()
 
-        if drawing_engine == OLD_CODE:
+        if DRAWING_ENGINE == OLD_CODE:
             self.my_spite_list = arcade.SpriteList()
         else:
             self.my_spite_list = MySpriteList()
 
-        sprite_names = ['gold_1.png', 'gold_2.png', 'gold_3.png', 'gold_4.png']
+        sprite_names = ['gold_1.png', 'gold_2.png', 'gold_3.png', 'gold_4.png', 'character.png']
         for i in range(INSTANCES):
-            my_sprite = MySprite('gold_1.png', 0.25)
+            texture_name = random.choice(sprite_names)
+            my_sprite = MySprite(texture_name, 0.25)
 
             my_sprite.center_x = random.randrange(SCREEN_WIDTH)
             my_sprite.center_y = random.randrange(SCREEN_HEIGHT)
             my_sprite.angle = random.randrange(360)
-            my_sprite.texture_name = random.choice(sprite_names)
+            my_sprite.angle = 0
+            my_sprite.texture_name = texture_name
 
             my_sprite.change_x = random.random() * 5 - 2.5
             my_sprite.change_y = random.random() * 5 - 2.5
             my_sprite.change_angle = random.random() * 5 - 2.5
+            my_sprite.change_angle = 0
             my_sprite.scale = 0.25
 
             self.my_spite_list.append(my_sprite)
 
-        if drawing_engine == NEW_CODE:
+        self.my_spite_list.update()
+
+        if DRAWING_ENGINE == NEW_CODE:
             projection = create_orthogonal_projection(left=0, right=SCREEN_WIDTH, bottom=0, top=SCREEN_HEIGHT,
                                                       near=-1000, far=100, dtype=np.float32)
 
@@ -356,13 +367,14 @@ class MyWindow(arcade.Window):
         pyglet.clock.schedule_interval(self.show_fps, 1)
 
     def update(self, dt):
-        self.my_spite_list.update()
+        if MOVE_SPRITES:
+            self.my_spite_list.update()
 
     def show_fps(self, dt):
         print(f"FPS: {self.fps_counter.get_fps()}")
 
     def on_draw(self):
-        if drawing_engine == OLD_CODE:
+        if DRAWING_ENGINE == OLD_CODE:
             arcade.start_render()
         else:
             opengl_context.clear(0.0, 0.0, 0.0, 0.0, depth=1.0)
